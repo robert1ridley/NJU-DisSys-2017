@@ -109,6 +109,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here.
+	Term int
+	VoteGranted bool
 }
 
 //
