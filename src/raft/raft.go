@@ -18,7 +18,7 @@ package raft
 //
 
 import "sync"
-import "labrpc"
+import "NJU-DisSys-2017/src/labrpc"
 
 // import "bytes"
 // import "encoding/gob"
