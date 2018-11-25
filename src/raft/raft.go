@@ -163,8 +163,9 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Term = args.Term
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
+		rf.state = "Follower"
 		rf.mu.Unlock()
-		go rf.follower()
+		go rf.ServerLoop()
 	}
 	if (rf.votedFor != -1 || rf.votedFor == args.CandidateId) {
 		rf.mu.Lock()
@@ -280,91 +281,111 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	// servers are initialized as followers
-	go rf.follower()
+	rf.RunServerLoop()
 
 	return rf
 }
 
+func (rf *Raft) RunServerLoop() {
+	// servers are initialized as followers
+	rf.state = "Follower"
+	go rf.ServerLoop()
+}
+
 func (rf *Raft) randomNumberGenerator() int {
+	// generate random number for timeout feature
 	randomNumber := rand.Intn(150) + 150
 	return randomNumber
 }
 
-func (rf *Raft) follower() {
-	rf.state = "Follower"
-	rf.heartbeat = true
+func (rf *Raft) ServerLoop() {
 	for {
-		timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
- 		<-timer.C
-		if rf.state != "Follower" {
-			return
-		}
-		if !rf.heartbeat {
-			go rf.candidate()
-			return
-		}
-		rf.heartbeat = false
-	}
-}
-
-func (rf *Raft) candidate() {
-	rf.state = "Candidate"
-	for {
-		rf.currentTerm++
-		// vote for itself
-		rf.votedFor = rf.me
-		votes := 1
-		timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
-		ch := make(chan *RequestVoteReply)
-		for i := 0; i < len(rf.peers); i++ {
-			if i != rf.me {
-				go rf.handleSendRequestVote(i, ch)
+		switch rf.state {
+		case "Follower":
+			rf.heartbeat = true
+			breakFromLoop := false
+			for {
+				timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
+				 <-timer.C
+				if rf.state != "Follower" {
+					breakFromLoop = true
+					break
+				}
+				if !rf.heartbeat {
+					rf.state = "Candidate"
+					breakFromLoop = true
+					break
+				}
+				if breakFromLoop {
+					break
+				}
+				rf.heartbeat = false
 			}
-		}
-		for i := 0; i < len(rf.peers); i++ {
-			if i != rf.me {
-				reply := <-ch
-				if reply != nil {
-					if reply.Term > rf.currentTerm {
-						rf.currentTerm = reply.Term
-						go rf.follower()
-						return
-					} else if reply.VoteGranted {
-						votes++
+		case "Candidate":
+			for {
+				rf.currentTerm++
+				// Candidate first votes for itself
+				rf.votedFor = rf.me
+				votes := 1
+				timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
+				ch := make(chan *RequestVoteReply)
+				breakFromLoop := false
+				for i := 0; i < len(rf.peers); i++ {
+					if i != rf.me {
+						go rf.handleSendRequestVote(i, ch)
 					}
 				}
-			}
-		}
-		if votes >= len(rf.peers)/2+1 {
-			go rf.leader()
-			return
-		}
-		<-timer.C
-		if rf.state != "Candidate" {
-			return
-		}
-	}
-}
-
-func (rf *Raft) leader() {
-	rf.state = "Leader"
-	for {
-		ch := make(chan *AppendEntriesReply)
-		for i := 0; i < len(rf.peers); i++ {
-			if i != rf.me {
-				go rf.SendHeartBeat(i, ch)
-			}
-		}
-		for i := 0; i < len(rf.peers); i++ {
-			if i != rf.me {
-				reply := <-ch
-				if reply != nil {
-					if reply.Term > rf.currentTerm {
-						rf.currentTerm = reply.Term
-						go rf.follower()
-						return
+				for i := 0; i < len(rf.peers); i++ {
+					if i != rf.me {
+						reply := <-ch
+						if reply != nil {
+							if reply.Term > rf.currentTerm {
+								rf.currentTerm = reply.Term
+								rf.state = "Follower"
+								breakFromLoop = true
+								break
+							} else if reply.VoteGranted {
+								votes++
+							}
+						}
 					}
+				}
+				if breakFromLoop {
+					break
+				}
+				if votes >= len(rf.peers)/2+1 {
+					rf.state = "Leader"
+					break
+				}
+				<-timer.C
+				if rf.state != "Candidate" {
+					break
+				}
+			}
+		case "Leader":
+			for {
+				ch := make(chan *AppendEntriesReply)
+				for i := 0; i < len(rf.peers); i++ {
+					if i != rf.me {
+						go rf.SendHeartBeat(i, ch)
+					}
+				}
+				breakFromLoop := false
+				for i := 0; i < len(rf.peers); i++ {
+					if i != rf.me {
+						reply := <-ch
+						if reply != nil {
+							if reply.Term > rf.currentTerm {
+								rf.currentTerm = reply.Term
+								rf.state = "Follower"
+								breakFromLoop = true
+								break
+							}
+						}
+					}
+				}
+				if breakFromLoop {
+					break
 				}
 			}
 		}
@@ -389,11 +410,11 @@ func (rf *Raft) AppendEntries (args AppendEntriesArgs, reply *AppendEntriesReply
 	rf.heartbeat = true
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
-		go rf.follower()
+		rf.RunServerLoop()
 	} else if args.Term < rf.currentTerm {
 		reply.Success = false
 	} else if rf.state == "Candidate" {
-		go rf.follower()
+		rf.RunServerLoop()
 	}
 	reply.Term = rf.currentTerm
 }
@@ -405,7 +426,7 @@ func (rf *Raft) handleAppendEntries(reply AppendEntriesReply) {
 	if reply.Term > rf.currentTerm {
 		rf.currentTerm = reply.Term
 		rf.votedFor = -1
-		go rf.follower()
+		rf.RunServerLoop()
 		return
 	}
 }
