@@ -44,10 +44,12 @@ type LogEntry struct {
 	Command interface {}
 }
 
+type ServerState string
+
 const(
-	Leader = iota
-	Follower
-	Candidate
+	Leader ServerState = "Leader"
+	Follower ServerState = "Follower"
+	Candidate ServerState = "Candidate"
 )
 
 //
@@ -63,7 +65,7 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 	
-	role int
+	state string
 	currentTerm int
 	votedFor int
 	log[] LogEntry
@@ -71,8 +73,8 @@ type Raft struct {
 	commitIndex int
 	lastApplied int
 
-	nextIndex int
-	matchIndex int
+	nextIndex[] int
+	matchIndex[] int
 
 	heartbeat bool
 }
@@ -85,7 +87,11 @@ func (rf *Raft) GetState() (int, bool) {
 	var isleader bool
 	// Your code here.
 	term = rf.currentTerm
-	isleader = rf.role == Leader
+	if rf.state == "Leader" {
+		isleader = true
+	} else {
+		isleader = false
+	}
 	return term, isleader
 }
 
@@ -144,7 +150,6 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here.
 	if args.Term < rf.currentTerm {
 		rf.mu.Lock()
 		reply.Term = rf.currentTerm
@@ -187,17 +192,16 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
-	channel := make(chan bool)
-	
-	go func() {
-		channel <- rf.peers[server].Call("Raft.RequestVote", args, reply)
+	ch := make(chan bool)
+	go func(){
+		ch <- rf.peers[server].Call("Raft.RequestVote", args, reply)
 	}()
 	timer := time.NewTimer(time.Duration(5) * time.Millisecond)
 	select{
-	case <- timer.C:
+	case <-timer.C:
 		return false
-	case response := <- channel:
-		return response
+	case r := <-ch:
+		return r
 	}
 }
 
@@ -269,8 +273,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 
-	rf.nextIndex = 0
-	rf.matchIndex = 0
+	rf.nextIndex = nil
+	rf.matchIndex = nil
+	rf.heartbeat = false
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -287,69 +292,73 @@ func (rf *Raft) randomNumberGenerator() int {
 }
 
 func (rf *Raft) follower() {
-	rf.role = Follower
+	rf.state = "Follower"
 	rf.heartbeat = true
 	for {
 		timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
-		<-timer.C
-		// Respond to RPC from candidates and leaders
-		if rf.role != Follower {
+ 		<-timer.C
+		if rf.state != "Follower" {
 			return
 		}
-
-		// Become candidate if heartbeat not received
 		if !rf.heartbeat {
 			go rf.candidate()
+			return
 		}
 		rf.heartbeat = false
 	}
 }
 
 func (rf *Raft) candidate() {
-	rf.role = Candidate
-	
-	// Increment current term
-	rf.currentTerm += 1
-	// Vote for self
-	rf.votedFor = rf.me
-	votes := 1
-	channel := make(chan *RequestVoteReply)
-	timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
-	for i := 0; i < len(rf.peers); i++ {
-		if i != rf.me {
-			// Send Request Vote to all other servers
-			go rf.handleSendRequestVote(i, channel)
-		}
-	}
-	for i := 0; i < len(rf.peers); i++ {
-		reply := <-channel
-		if reply != nil {
-			if reply.Term > rf.currentTerm {
-				rf.currentTerm = reply.Term
-				go rf.follower()
-				return
-			} else if reply.VoteGranted {
-				votes += 1
+	rf.state = "Candidate"
+	for {
+		rf.currentTerm++
+		// vote for itself
+		rf.votedFor = rf.me
+		votes := 1
+		timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
+		ch := make(chan *RequestVoteReply)
+		for i := 0; i < len(rf.peers); i++ {
+			if i != rf.me {
+				go rf.handleSendRequestVote(i, ch)
 			}
 		}
-	}
-	if votes >= len(rf.peers)-1/2 {
-		go rf.leader()
-		return
-	}
-	<-timer.C
-	if rf.role != Candidate {
-		return
+		for i := 0; i < len(rf.peers); i++ {
+			if i != rf.me {
+				reply := <-ch
+				if reply != nil {
+					if reply.Term > rf.currentTerm {
+						rf.currentTerm = reply.Term
+						go rf.follower()
+						return
+					} else if reply.VoteGranted {
+						votes++
+					}
+				}
+			}
+		}
+		if votes >= len(rf.peers)/2+1 {
+			go rf.leader()
+			return
+		}
+		<-timer.C
+		if rf.state != "Candidate" {
+			return
+		}
 	}
 }
 
 func (rf *Raft) leader() {
-	rf.role = Leader
+	rf.state = "Leader"
 	for {
-		channel := make(chan *AppendEntriesReply)
+		ch := make(chan *AppendEntriesReply)
 		for i := 0; i < len(rf.peers); i++ {
 			if i != rf.me {
-				reply := <- channel
+				go rf.SendHeartBeat(i, ch)
+			}
+		}
+		for i := 0; i < len(rf.peers); i++ {
+			if i != rf.me {
+				reply := <-ch
 				if reply != nil {
 					if reply.Term > rf.currentTerm {
 						rf.currentTerm = reply.Term
@@ -377,23 +386,16 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries (args AppendEntriesArgs, reply *AppendEntriesReply) {
-	if args.Term < rf.currentTerm {
-		reply.Term = rf.currentTerm
-		reply.Success = false
-		return
-	}
 	rf.heartbeat = true
 	if args.Term > rf.currentTerm {
-		rf.votedFor = -1
+		rf.currentTerm = args.Term
+		go rf.follower()
+	} else if args.Term < rf.currentTerm {
+		reply.Success = false
+	} else if rf.state == "Candidate" {
 		go rf.follower()
 	}
-	reply.Term = args.Term
-	reply.Success = true
-}
-
-func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	return ok
+	reply.Term = rf.currentTerm
 }
 
 func (rf *Raft) handleAppendEntries(reply AppendEntriesReply) {
@@ -405,5 +407,31 @@ func (rf *Raft) handleAppendEntries(reply AppendEntriesReply) {
 		rf.votedFor = -1
 		go rf.follower()
 		return
+	}
+}
+
+func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ch := make(chan bool)
+	go func(){
+		ch <- rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	}()
+	timer := time.NewTimer(time.Duration(5) * time.Millisecond)
+	select{
+	case <-timer.C:
+		return false
+	case r := <-ch:
+		return r
+	}
+}
+
+func (rf *Raft) SendHeartBeat(i int,ch chan *AppendEntriesReply) {
+	args := AppendEntriesArgs{}
+	args.Term = rf.currentTerm
+	args.LeaderId = rf.me
+	reply := &AppendEntriesReply{}
+	if rf.sendAppendEntries(i, args, reply) {
+		ch <- reply
+	} else {
+		ch <- nil
 	}
 }
