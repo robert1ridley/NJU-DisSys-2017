@@ -164,7 +164,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
 		rf.mu.Unlock()
-		go rf.ServerLoop()
+		go rf.RunServerLoop()
 	}
 	if (rf.votedFor != -1 || rf.votedFor == args.CandidateId) {
 		rf.mu.Lock()
