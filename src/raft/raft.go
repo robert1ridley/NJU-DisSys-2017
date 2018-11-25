@@ -351,8 +351,8 @@ func (rf *Raft) ServerLoop() {
 											rf.state = "Follower"
 											break BreakLocation
 										} else if reply.VoteGranted {
-											// At this point, we know the candidate's election term is at least as high as that of the responding peer
-											// Therefore, this peer's vote will be counted.
+											// At this point, we know the candidate's election term is at least as high as that of the 
+											// responding peer. Therefore, this peer's vote will be counted.
 											votes++
 										}
 									}
@@ -411,17 +411,13 @@ type AppendEntriesReply struct {
 	Success bool
 }
 
+// Reply false if term < currentTerm
 func (rf *Raft) AppendEntries (args AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.heartbeat = true
-	if args.Term > rf.currentTerm {
-		rf.currentTerm = args.Term
-		rf.RunServerLoop()
-	} else if args.Term < rf.currentTerm {
+	if args.Term < rf.currentTerm {
 		reply.Success = false
-	} else if rf.state == "Candidate" {
-		rf.RunServerLoop()
+		reply.Term = rf.currentTerm
 	}
-	reply.Term = rf.currentTerm
 }
 
 // This function includes the RPC for sending the heartbeat along with the payload to the peer servers
