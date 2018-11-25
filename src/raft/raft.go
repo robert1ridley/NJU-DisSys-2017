@@ -198,12 +198,6 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 		ch <- rf.peers[server].Call("Raft.RequestVote", args, reply)
 	}()
 	timer := time.NewTimer(time.Duration(5) * time.Millisecond)
-	// select{
-	// case <-timer.C:
-	// 	return false
-	// case r := <-ch:
-	// 	return r
-	// }
 	return rf.TimerExpired(timer, ch)
 }
 
@@ -311,15 +305,17 @@ func (rf *Raft) randomNumberGenerator() int {
 func (rf *Raft) ServerLoop() {
 	for {
 		BreakLocation:
+		// Server loop contains switch statement, checking whether server state is 'follower', 'candidate' or 'leader'
 			switch rf.state {
 					case "Follower":
 						rf.heartbeat = true
 						for {
+							// Follower sets a timer for 
 							timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
+							// wait for timer to timeout
 							<-timer.C
-							if rf.state != "Follower" {
-								break BreakLocation
-							}
+							// if no heartbeat received from leader within timeout period, server switches state to candidate.
+							// it will then exit the switch statement and will re-enter with the state of 'Candidate'
 							if !rf.heartbeat {
 								rf.state = "Candidate"
 								break BreakLocation
@@ -328,26 +324,34 @@ func (rf *Raft) ServerLoop() {
 						}
 					case "Candidate":
 						for {
+							// Candidate starts new election term and votes for itself
 							rf.currentTerm++
-							// Candidate first votes for itself
 							rf.votedFor = rf.me
 							votes := 1
+							// Election timer is set
 							timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
 							ch := make(chan *RequestVoteReply)
+							// Candidate sends vote requests to other peers
 							for i := 0; i < len(rf.peers); i++ {
 								if i != rf.me {
 									go rf.handleSendRequestVote(i, ch)
 								}
 							}
+							// Iterate through replies to vote requests from peers
 							for i := 0; i < len(rf.peers); i++ {
 								if i != rf.me {
+									// retrieve the reply from the channel
 									reply := <-ch
 									if reply != nil {
 										if reply.Term > rf.currentTerm {
+											// If the election term of the candidate server is lower than that of a peer, the candidate will
+											// update its term value and will also change its state to follower
 											rf.currentTerm = reply.Term
 											rf.state = "Follower"
 											break BreakLocation
 										} else if reply.VoteGranted {
+											// At this point, we know the candidate's election term is at least as high as that of the responding peer
+											// Therefore, this peer's vote will be counted.
 											votes++
 										}
 									}
@@ -357,10 +361,8 @@ func (rf *Raft) ServerLoop() {
 								rf.state = "Leader"
 								break BreakLocation
 							}
+							// Wait for timer to timeout before running new election
 							<-timer.C
-							if rf.state != "Candidate" {
-								break BreakLocation
-							}
 						}
 					case "Leader":
 						for {
