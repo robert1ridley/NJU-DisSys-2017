@@ -358,6 +358,7 @@ func (rf *Raft) ServerLoop() {
 									}
 								}
 							}
+							// If candidate receives majority of votes from peers it can transfer state to 'Leader'
 							if votes >= len(rf.peers)/2+1 {
 								rf.state = "Leader"
 								break BreakLocation
@@ -367,16 +368,22 @@ func (rf *Raft) ServerLoop() {
 						}
 					case "Leader":
 						for {
+							// Leader will send regular heartbeats to follower peers.
 							ch := make(chan *AppendEntriesReply)
 							for i := 0; i < len(rf.peers); i++ {
 								if i != rf.me {
 									go rf.SendHeartBeat(i, ch)
 								}
 							}
+							// TODO: handle commands received from client and implement logic for logging
+
+							// loop response to heartbeats from peers
 							for i := 0; i < len(rf.peers); i++ {
 								if i != rf.me {
 									reply := <-ch
 									if reply != nil {
+										// If responding peer is at a later election term, the leader will 
+										// update its term and will change state to follower
 										if reply.Term > rf.currentTerm {
 											rf.currentTerm = reply.Term
 											rf.state = "Follower"
@@ -417,18 +424,7 @@ func (rf *Raft) AppendEntries (args AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 }
 
-func (rf *Raft) handleAppendEntries(reply AppendEntriesReply) {
-	if reply.Success {
-		return
-	}
-	if reply.Term > rf.currentTerm {
-		rf.currentTerm = reply.Term
-		rf.votedFor = -1
-		rf.RunServerLoop()
-		return
-	}
-}
-
+// This function includes the RPC for sending the heartbeat along with the payload to the peer servers
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ch := make(chan bool)
 	go func () {
@@ -438,6 +434,8 @@ func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *App
 	return rf.TimerExpired(timer, ch)
 }
 
+// In this function, heartbeats are sent out to peers. The AppendEntriesArgs are 
+// conveniently sent with the hearbeat as a payload.
 func (rf *Raft) SendHeartBeat(i int,ch chan *AppendEntriesReply) {
 	payload := AppendEntriesArgs{}
 	payload.Term = rf.currentTerm
