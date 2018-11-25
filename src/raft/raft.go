@@ -198,6 +198,16 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 		ch <- rf.peers[server].Call("Raft.RequestVote", args, reply)
 	}()
 	timer := time.NewTimer(time.Duration(5) * time.Millisecond)
+	// select{
+	// case <-timer.C:
+	// 	return false
+	// case r := <-ch:
+	// 	return r
+	// }
+	return rf.TimerExpired(timer, ch)
+}
+
+func (rf *Raft) TimerExpired(timer *time.Timer, ch chan bool) bool {
 	select{
 	case <-timer.C:
 		return false
@@ -422,12 +432,7 @@ func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *App
 		ch <- rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	}()
 	timer := time.NewTimer(time.Duration(5) * time.Millisecond)
-	select{
-	case <-timer.C:
-		return false
-	case r := <-ch:
-		return r
-	}
+	return rf.TimerExpired(timer, ch)
 }
 
 func (rf *Raft) SendHeartBeat(i int,ch chan *AppendEntriesReply) {
