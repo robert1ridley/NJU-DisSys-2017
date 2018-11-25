@@ -151,6 +151,7 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term < rf.currentTerm {
+		// Don't allow this follower to vote if its election term is higher than that of the candidate's election term.
 		rf.mu.Lock()
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
@@ -158,6 +159,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 	if args.Term > rf.currentTerm {
+		// If this peer has a lower election term than that of the candidate, update peer's term and grant vote
 		rf.mu.Lock()
 		rf.currentTerm = args.Term
 		reply.Term = args.Term
@@ -167,6 +169,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		go rf.RunServerLoop()
 	}
 	if (rf.votedFor != -1 || rf.votedFor == args.CandidateId) {
+		// grant vote if votedFor is null or candidateId
 		rf.mu.Lock()
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
