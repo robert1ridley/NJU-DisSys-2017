@@ -310,7 +310,8 @@ func (rf *Raft) ServerLoop() {
 					case "Follower":
 						rf.heartbeat = true
 						for {
-							// Follower sets a timer for 
+							// Follower sets a timer. If it hasn't received a heartbeat from the leader before the timeour, it will
+							// become a candidate. Timeout is set randomly between 150 and 300 ms by the randomNumberGenerator() function.
 							timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
 							// wait for timer to timeout
 							<-timer.C
