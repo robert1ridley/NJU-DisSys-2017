@@ -77,6 +77,7 @@ type Raft struct {
 	matchIndex[] int
 
 	heartbeat bool
+	applyCh chan ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -239,8 +240,16 @@ func (rf *Raft) handleSendRequestVote(server int, channel chan *RequestVoteReply
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := rf.lastApplied +1
+	index := -1
 	term, isLeader := rf.GetState()
+	if isLeader {
+		rf.mu.Lock()
+		entry := LogEntry{Term: term, Command: command}
+		rf.log = append(rf.log, entry)
+		rf.persist()
+		index = len(rf.log) - 1
+		rf.mu.Unlock()
+	}
 	return index, term, isLeader
 }
 
@@ -283,6 +292,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = nil
 	rf.matchIndex = nil
 	rf.heartbeat = false
+	rf.applyCh = applyCh
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
