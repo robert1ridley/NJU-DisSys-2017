@@ -291,6 +291,7 @@ func TestRejoin(t *testing.T) {
 	fmt.Printf("Test: rejoin of partitioned leader ...\n")
 
 	cfg.one(101, servers)
+	
 
 	// leader network failure
 	leader1 := cfg.checkOneLeader()
