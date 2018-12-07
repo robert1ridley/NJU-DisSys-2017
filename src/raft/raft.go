@@ -227,6 +227,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	fmt.Println(ok)
 	return ok
 }
 
@@ -238,7 +239,6 @@ func (rf *Raft) handleSendRequestVote(server int) {
 	args.CandidateId = rf.me
 	reply := &RequestVoteReply{}
 	if rf.sendRequestVote(server, args, reply) {
-		fmt.Println(reply)
 		rf.mu.Lock()
 		defer rf.mu.Lock()
 		if rf.state == "Candidate" {
@@ -332,7 +332,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	rf.ServerLoop()
+	go rf.followerLoop()
 
 	return rf
 }
@@ -340,7 +340,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 func (rf *Raft) RunServerLoopAsFollower() {
 	// servers are initialized as followers
 	rf.state = "Follower"
-	go rf.ServerLoop()
+	go rf.followerLoop()
+}
+
+func (rf *Raft) RunServerLoopAsCandidate() {
+	rf.state = "Candidate"
+	go rf.candidateLoop()
 }
 
 func (rf *Raft) RunServerLoopAsLeader() {
@@ -353,7 +358,7 @@ func (rf *Raft) RunServerLoopAsLeader() {
 			rf.matchIndex[i] = 0
 		}
 	}
-	go rf.ServerLoop()
+	go rf.leaderLoop()
 }
 
 func (rf *Raft) randomNumberGenerator() int {
@@ -362,79 +367,79 @@ func (rf *Raft) randomNumberGenerator() int {
 	return randomNumber
 }
 
-func (rf *Raft) ServerLoop() {
-		BreakLocation:
-		// Server loop contains switch statement, checking whether server state is 'follower', 'candidate' or 'leader'
-			switch rf.state {
-					case "Follower":
-						rf.heartbeat = false
-						for {
-							// Follower sets a timer. If it hasn't received a heartbeat from the leader before the timeour, it will
-							// become a candidate. Timeout is set randomly between 150 and 300 ms by the randomNumberGenerator() function.
-							timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
-							// wait for timer to timeout
-							<-timer.C
-							// if no heartbeat received from leader within timeout period, server switches state to candidate.
-							// it will then exit the switch statement and will re-enter with the state of 'Candidate'
-							if rf.state == "Follower" && rf.heartbeat == false {
-								rf.state = "Candidate"
-								break BreakLocation
-							}
-							rf.heartbeat = false
-						}
-					case "Candidate":
-						fmt.Println(rf.state)
-						fmt.Println(rf.heartbeat)
-						for {
-							// Candidate starts new election term and votes for itself
-							rf.mu.Lock()
-							rf.currentTerm++
-							rf.votedFor = rf.me
-							rf.persist()
-							rf.votes = 1
-							// Candidate sends vote requests to other peers
-							for i := 0; i < len(rf.peers); i++ {
-								if i != rf.me {
-									go rf.handleSendRequestVote(i)
-								}
-							}
-							rf.mu.Unlock()
-							// Election timer is set
-							timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
-							// Wait for timer to timeout before running new election
-							<-timer.C
-						}
-					case "Leader":
-						for {
-							// Leader will send regular heartbeats to follower peers.
-							for i := 0; i < len(rf.peers); i++ {
-									go rf.SendHeartBeat(i)
-								}
-							for i := len(rf.log) - 1; i > rf.commitIndex; i-- {
-								if rf.log[i].Term == rf.currentTerm {
-									count := 0
-									for j := 0; j < len(rf.peers); j++ {
-										if j != rf.me && rf.matchIndex[j] >= i {
-											count ++
-										}
-									}
-									if count >= len(rf.peers)/2 {
-										rf.commitIndex = i
-										break
-										}
-									}
-								}
-								timer := time.NewTimer(time.Duration(200) * time.Millisecond)
-								go func() {
-									for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-										rf.applyCh <- ApplyMsg{Index: i, Command: rf.log[i].Command}
-										rf.lastApplied = i
-									}
-								}()
-								<-timer.C
-							}
-						}
+func (rf *Raft) followerLoop() {
+	rf.heartbeat = false
+	for rf.state == "Follower" {
+		// Follower sets a timer. If it hasn't received a heartbeat from the leader before the timeour, it will
+		// become a candidate. Timeout is set randomly between 150 and 300 ms by the randomNumberGenerator() function.
+		timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
+		// wait for timer to timeout
+		<-timer.C
+		// if no heartbeat received from leader within timeout period, server switches state to candidate.
+		// it will then exit the switch statement and will re-enter with the state of 'Candidate'
+		if rf.state == "Follower" && rf.heartbeat == false {
+			// rf.state = "Candidate"
+			rf.RunServerLoopAsCandidate()
+			return
 		}
+		rf.heartbeat = false
+	}
+}
+
+func (rf *Raft) candidateLoop() {
+	for rf.state == "Candidate" {
+		// Candidate starts new election term and votes for itself
+		rf.mu.Lock()
+		rf.currentTerm++
+		rf.votedFor = rf.me
+		rf.persist()
+		rf.votes = 1
+		// Candidate sends vote requests to other peers
+		for i := 0; i < len(rf.peers); i++ {
+			if i != rf.me {
+				go rf.handleSendRequestVote(i)
+			}
+		}
+		rf.mu.Unlock()
+		// Election timer is set
+		timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
+		// Wait for timer to timeout before running new election
+		<-timer.C
+	}
+}
+
+func (rf *Raft) leaderLoop() {
+	for rf.state == "Leader" {
+		// Leader will send regular heartbeats to follower peers.
+		for i := 0; i < len(rf.peers); i++ {
+			if i != rf.me {
+				go rf.SendHeartBeat(i)
+			}
+		}
+		for i := len(rf.log) - 1; i > rf.commitIndex; i-- {
+			if rf.log[i].Term == rf.currentTerm {
+				count := 0
+				for j := 0; j < len(rf.peers); j++ {
+					if j != rf.me && rf.matchIndex[j] >= i {
+						count ++
+					}
+				}
+				if count >= len(rf.peers)/2 {
+					rf.commitIndex = i
+					break
+					}
+				}
+			}
+			timer := time.NewTimer(time.Duration(200) * time.Millisecond)
+			go func() {
+				for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
+					rf.applyCh <- ApplyMsg{Index: i, Command: rf.log[i].Command}
+					rf.lastApplied = i
+				}
+			}()
+			<-timer.C
+		}
+}
 
 type AppendEntriesArgs struct {
 	Term int
