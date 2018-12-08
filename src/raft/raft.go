@@ -214,17 +214,21 @@ func (rf *Raft) handleSendRequestVote(i int) {
 	args.CandidateId = rf.me
 	reply := &RequestVoteReply{}
 	if rf.sendRequestVote(i, args, reply) {
-		if reply.Term > rf.currentTerm {
-			rf.currentTerm = reply.Term
-			rf.persist()
-			rf.RunServerLoopAsFollower()
-			return
-		} else if reply.VoteGranted {
-			rf.votes++
-		}
-		if rf.votes >= len(rf.peers)/2+1 {
-			rf.RunServerLoopAsLeader()
-			return
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		if rf.state == Candidate {
+			if reply.Term > rf.currentTerm {
+				rf.currentTerm = reply.Term
+				rf.persist()
+				rf.RunServerLoopAsFollower()
+				return
+			} else if reply.VoteGranted {
+				rf.votes++
+			}
+			if rf.votes >= len(rf.peers)/2+1 {
+				rf.RunServerLoopAsLeader()
+				return
+			}
 		}
 	}
 }
@@ -464,6 +468,8 @@ func (rf *Raft) SendHeartBeat(i int) {
 	reply := &AppendEntriesReply{}
 	
 	if rf.sendAppendEntries(i, args, reply) {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
 		if rf.state == Leader {
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
@@ -473,6 +479,7 @@ func (rf *Raft) SendHeartBeat(i int) {
 			} else if reply.Success {
 				rf.matchIndex[i] = reply.NextIndex - 1
 				if rf.nextIndex[i] < reply.NextIndex {
+					// rf.nextIndex[i] = reply.NextIndex
 				}
 				rf.nextIndex[i] = reply.NextIndex
 			} else {
