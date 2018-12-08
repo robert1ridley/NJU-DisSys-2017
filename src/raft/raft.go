@@ -171,17 +171,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 				reply.VoteGranted = true
 			}
 		}
-	case Candidate:
-		if args.Term > rf.currentTerm {
-			rf.currentTerm = args.Term
-			rf.votedFor = -1
-			rf.RunServerLoopAsFollower()
-			if isLogMatch {
-				rf.votedFor = args.CandidateId
-				reply.VoteGranted = true
-			}
-		}
-	case Leader:
+	case Candidate, Leader:
 		if args.Term > rf.currentTerm {
 			rf.currentTerm = args.Term
 			rf.votedFor = -1
@@ -224,19 +214,17 @@ func (rf *Raft) handleSendRequestVote(i int) {
 	args.CandidateId = rf.me
 	reply := &RequestVoteReply{}
 	if rf.sendRequestVote(i, args, reply) {
-		if rf.state == Candidate {
-			if reply.Term > rf.currentTerm {
-				rf.currentTerm = reply.Term
-				rf.persist()
-				rf.RunServerLoopAsFollower()
-				return
-			} else if reply.VoteGranted {
-				rf.votes++
-			}
-			if rf.votes >= len(rf.peers)/2+1 {
-				rf.RunServerLoopAsLeader()
-				return
-			}
+		if reply.Term > rf.currentTerm {
+			rf.currentTerm = reply.Term
+			rf.persist()
+			rf.RunServerLoopAsFollower()
+			return
+		} else if reply.VoteGranted {
+			rf.votes++
+		}
+		if rf.votes >= len(rf.peers)/2+1 {
+			rf.RunServerLoopAsLeader()
+			return
 		}
 	}
 }
