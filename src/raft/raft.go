@@ -7,28 +7,29 @@ package raft
 //
 // rf = Make(...)
 //   create a new Raft server.
-// rf.Start(command interface{}) (index, term, isleader)
+// rf.Start(command interface{}) (index, Term, isleader)
 //   start agreement on a new log entry
-// rf.GetState() (term, isLeader)
-//   ask a Raft for its current term, and whether it thinks it is leader
+// rf.GetState() (Term, isLeader)
+//   ask a Raft for its current Term, and whether it thinks it is leader
 // ApplyMsg
 //   each time a new entry is committed to the log, each Raft peer
 //   should send an ApplyMsg to the service (or tester)
 //   in the same server.
 //
 
-import "sync"
-import "NJU-DisSys-2017/src/labrpc"
-
-import "bytes"
-import "encoding/gob"
-import "time"
-import "math"
-import "math/rand"
-import "fmt"
+import (
+	"sync"
+	"NJU-DisSys-2017/src/labrpc"
+	"bytes"
+	"encoding/gob"
+	"time"
+	"math/rand"
+	// "fmt"
+	"math"
+)
 
 //
-// as each Raft peer becomes aware that successive log entries are
+// as each Raft peer becomes aware that successive log Entries are
 // committed, the peer should send an ApplyMsg to the service (or
 // tester) on the same server, via the applyCh passed to Make().
 //
@@ -40,9 +41,8 @@ type ApplyMsg struct {
 }
 
 type LogEntry struct {
-	Index int
-	Term int
-	Command interface {}
+	Term 		int
+	Command		interface{}
 }
 
 type ServerState string
@@ -66,36 +66,36 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 	
-	state ServerState
-	currentTerm int
-	votedFor int
-	log[] LogEntry
+	state	ServerState
+	currentTerm	int
+	votedFor		int
+	log	[]LogEntry
 
-	commitIndex int
-	lastApplied int
+	commitIndex	int
+	lastApplied	int
 
-	nextIndex[] int
-	matchIndex[] int
+	nextIndex	[]int
+	matchIndex	[]int
 
-	heartbeat bool
-	applyCh chan ApplyMsg
-	votes int
+	heartbeat	bool
+	applyCh 	chan ApplyMsg
+
+	votes		int
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
 	var term int
-	var isleader bool
+	var isLeader bool
 	// Your code here.
 	term = rf.currentTerm
-	if rf.state == "Leader" {
-		isleader = true
+	if rf.state == Leader {
+		isLeader = true
 	} else {
-		isleader = false
+		isLeader = false
 	}
-	return term, isleader
+	return term, isLeader
 }
 
 //
@@ -126,9 +126,6 @@ func (rf *Raft) readPersist(data []byte) {
 	d.Decode(&rf.log)
 }
 
-
-
-
 //
 // example RequestVote RPC arguments structure.
 //
@@ -150,62 +147,52 @@ type RequestVoteReply struct {
 	From int
 }
 
-func (rf *Raft) isLogMatch(args RequestVoteArgs) bool {
-	if rf.log[len(rf.log)-1].Term != args.LastLogTerm {
-		return rf.log[len(rf.log)-1].Term < args.LastLogTerm
-	} else {
-		return len(rf.log) -1 <= args.LastLogIndex
-	}
-}
-
 //
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
-	rf.mu.Lock()
-	defer rf.mu.Lock()
-	defer rf.persist()
-	reply.VoteGranted = false
-	if rf.state == "Follower" {
+	// Your code here.
+	isLogMatch := rf.isLogMatch(args)
+	switch rf.state {
+	case Follower:
 		if args.Term > rf.currentTerm {
+			// If this peer has a lower election term than that of the candidate, update peer's term
 			rf.currentTerm = args.Term
 			rf.votedFor = -1
-			if rf.isLogMatch(args) {
+			if isLogMatch {
+				// grant vote if the candidate’s log is at least as up-to-date as receiving peer's log
 				rf.votedFor = args.CandidateId
 				rf.heartbeat = true
 				reply.VoteGranted = true
 			}
 		} else if args.Term == rf.currentTerm {
-			if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && rf.isLogMatch(args) {
+			if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && isLogMatch {
 				rf.votedFor = args.CandidateId
 				rf.heartbeat = true
 				reply.VoteGranted = true
 			}
 		}
-	} else if rf.state == "Candidate" {
+	case Candidate:
 		if args.Term > rf.currentTerm {
-			// If this peer has a lower election term than that of the candidate, update peer's term and grant vote
 			rf.currentTerm = args.Term
 			rf.votedFor = -1
 			rf.RunServerLoopAsFollower()
-			if rf.isLogMatch(args) {
+			if isLogMatch {
 				rf.votedFor = args.CandidateId
 				reply.VoteGranted = true
 			}
 		}
-	} else if rf.state == "Leader" {
+	case Leader:
 		if args.Term > rf.currentTerm {
 			rf.currentTerm = args.Term
 			rf.votedFor = -1
 			rf.RunServerLoopAsFollower()
-			if rf.isLogMatch(args) {
+			if isLogMatch {
 				rf.votedFor = args.CandidateId
 				reply.VoteGranted = true
 			}
 		}
 	}
-	reply.From = rf.me
-	reply.Term = rf.currentTerm
 }
 
 //
@@ -227,28 +214,25 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	fmt.Println(ok)
 	return ok
 }
 
-func (rf *Raft) handleSendRequestVote(server int) {
+func (rf *Raft) handleSendRequestVote(i int) {
 	args := RequestVoteArgs{}
 	args.Term = rf.currentTerm
-	args.LastLogIndex = len(rf.log) - 1
+	args.LastLogIndex = len(rf.log) -1
 	args.LastLogTerm = rf.log[len(rf.log)-1].Term
 	args.CandidateId = rf.me
 	reply := &RequestVoteReply{}
-	if rf.sendRequestVote(server, args, reply) {
-		rf.mu.Lock()
-		defer rf.mu.Lock()
-		if rf.state == "Candidate" {
+	if rf.sendRequestVote(i, args, reply) {
+		if rf.state == Candidate {
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.persist()
 				rf.RunServerLoopAsFollower()
 				return
 			} else if reply.VoteGranted {
-				rf.votes ++
+				rf.votes++
 			}
 			if rf.votes >= len(rf.peers)/2+1 {
 				rf.RunServerLoopAsLeader()
@@ -257,7 +241,6 @@ func (rf *Raft) handleSendRequestVote(server int) {
 		}
 	}
 }
-
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
@@ -269,15 +252,15 @@ func (rf *Raft) handleSendRequestVote(server int) {
 //
 // the first return value is the index that the command will appear at
 // if it's ever committed. the second return value is the current
-// term. the third return value is true if this server believes it is
+// Term. the third return value is true if this server believes it is
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
-	term, isLeader := rf.GetState()
+	term,isLeader := rf.GetState()
 	if isLeader {
 		rf.mu.Lock()
-		entry := LogEntry{Term: term, Command: command}
+		entry := LogEntry{term,command}
 		rf.log = append(rf.log, entry)
 		rf.persist()
 		index = len(rf.log) - 1
@@ -315,14 +298,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here.
-	rf.state = "Follower"
+	rf.state = Follower
 	rf.currentTerm = 0
 	rf.votedFor = -1
-	rf.log = make([]LogEntry, 1)
-
+	rf.log = []LogEntry{LogEntry{0,nil}}
 	rf.commitIndex = 0
 	rf.lastApplied = 0
-
 	rf.nextIndex = nil
 	rf.matchIndex = nil
 	rf.heartbeat = false
@@ -332,112 +313,79 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	go rf.followerLoop()
-
+	go rf.ServerLoop()
 	return rf
 }
 
-func (rf *Raft) RunServerLoopAsFollower() {
-	// servers are initialized as followers
-	rf.state = "Follower"
-	go rf.followerLoop()
-}
-
-func (rf *Raft) RunServerLoopAsCandidate() {
-	rf.state = "Candidate"
-	go rf.candidateLoop()
-}
-
-func (rf *Raft) RunServerLoopAsLeader() {
-	rf.state = "Leader"
-	rf.nextIndex = make([]int, len(rf.peers))
-	rf.matchIndex = make([]int, len(rf.peers))
-	for i:= 0; i<len(rf.peers); i++ {
-		if i != rf.me {
-			rf.nextIndex[i] = len(rf.log)
-			rf.matchIndex[i] = 0
-		}
-	}
-	go rf.leaderLoop()
-}
-
-func (rf *Raft) randomNumberGenerator() int {
-	// generate random number for timeout feature
-	randomNumber := rand.Intn(150) + 150
-	return randomNumber
-}
-
-func (rf *Raft) followerLoop() {
-	rf.heartbeat = false
-	for rf.state == "Follower" {
-		// Follower sets a timer. If it hasn't received a heartbeat from the leader before the timeour, it will
-		// become a candidate. Timeout is set randomly between 150 and 300 ms by the randomNumberGenerator() function.
-		timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
-		// wait for timer to timeout
-		<-timer.C
-		// if no heartbeat received from leader within timeout period, server switches state to candidate.
-		// it will then exit the switch statement and will re-enter with the state of 'Candidate'
-		if rf.state == "Follower" && rf.heartbeat == false {
-			// rf.state = "Candidate"
-			rf.RunServerLoopAsCandidate()
-			return
-		}
-		rf.heartbeat = false
-	}
-}
-
-func (rf *Raft) candidateLoop() {
-	for rf.state == "Candidate" {
-		// Candidate starts new election term and votes for itself
-		rf.mu.Lock()
-		rf.currentTerm++
-		rf.votedFor = rf.me
-		rf.persist()
-		rf.votes = 1
-		// Candidate sends vote requests to other peers
-		for i := 0; i < len(rf.peers); i++ {
-			if i != rf.me {
-				go rf.handleSendRequestVote(i)
+func (rf *Raft) ServerLoop() {
+	// Server loop contains switch statement, checking whether server state is 'follower', 'candidate' or 'leader'
+	switch rf.state {
+		case Follower:
+			rf.heartbeat = false
+			for rf.state == Follower {
+				// Follower sets a timer. If it hasn't received a heartbeat from the leader before the timeour, it will
+				// become a candidate. Timeout is set randomly between 150 and 300 ms by the randomNumberGenerator() function.
+				timer := time.NewTimer(time.Duration(randomNumberGenerator()) * time.Millisecond)
+				// wait for timer to timeout
+				<-timer.C
+				// if no heartbeat received from leader within timeout period, server switches state to candidate.
+				// it will then exit the switch statement and will re-enter with the state of 'Candidate'
+				if rf.state == Follower && !rf.heartbeat {
+					rf.RunServerLoopAsCandidate()
+				}
+				rf.heartbeat = false
 			}
-		}
-		rf.mu.Unlock()
-		// Election timer is set
-		timer := time.NewTimer(time.Duration(rf.randomNumberGenerator()) * time.Millisecond)
-		// Wait for timer to timeout before running new election
-		<-timer.C
-	}
-}
-
-func (rf *Raft) leaderLoop() {
-	for rf.state == "Leader" {
-		// Leader will send regular heartbeats to follower peers.
-		for i := 0; i < len(rf.peers); i++ {
-			if i != rf.me {
-				go rf.SendHeartBeat(i)
-			}
-		}
-		for i := len(rf.log) - 1; i > rf.commitIndex; i-- {
-			if rf.log[i].Term == rf.currentTerm {
-				count := 0
-				for j := 0; j < len(rf.peers); j++ {
-					if j != rf.me && rf.matchIndex[j] >= i {
-						count ++
+		case Candidate:
+			for rf.state == Candidate {
+				// Candidate starts new election term and votes for itself
+				rf.mu.Lock()
+				rf.currentTerm++
+				rf.votedFor = rf.me
+				rf.persist()
+				rf.votes = 1
+				// Candidate sends vote requests to other peers
+				for i := 0; i < len(rf.peers); i++ {
+					if i != rf.me {
+						go rf.handleSendRequestVote(i)
 					}
 				}
-				if count >= len(rf.peers)/2 {
-					rf.commitIndex = i
-					break
+				rf.mu.Unlock()
+				// Election timer is set
+				timer := time.NewTimer(time.Duration(randomNumberGenerator()) * time.Millisecond)
+				// Wait for timer to timeout before running new election
+				<-timer.C
+			}
+		case Leader:
+			for rf.state == Leader {
+				// Leader will send regular heartbeats to follower peers.
+				for i := 0; i < len(rf.peers); i++ {
+					if i != rf.me {
+						go rf.SendHeartBeat(i)
 					}
 				}
-			}
-			timer := time.NewTimer(time.Duration(200) * time.Millisecond)
-			go func() {
-				for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-					rf.applyCh <- ApplyMsg{Index: i, Command: rf.log[i].Command}
-					rf.lastApplied = i
+				for N := len(rf.log) - 1; N > rf.commitIndex; N-- {
+					if rf.log[N].Term == rf.currentTerm {
+						count := 0
+						for i := 0; i < len(rf.peers); i++ {
+							if i != rf.me && rf.matchIndex[i] >= N {
+								count++
+							}
+						}
+						if count >= len(rf.peers)/2 {
+							rf.commitIndex = N
+							break
+						}
+					}
 				}
-			}()
-			<-timer.C
+				timer := time.NewTimer(time.Duration(200) * time.Millisecond)
+				go func() {
+					for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
+						rf.applyCh <- ApplyMsg{Index: i, Command: rf.log[i].Command}
+						rf.lastApplied = i
+					}
+				}()
+				<-timer.C
+			}
 		}
 }
 
@@ -445,24 +393,23 @@ type AppendEntriesArgs struct {
 	Term int
 	LeaderId int
 	PrevLogIndex int
-	PrevLogTerm int
-	Entries[] LogEntry
+	PrevLogTerm	int
+	Entries []LogEntry
 	LeaderCommit int
 }
 
 type AppendEntriesReply struct {
+	From int //for debug
 	Term int
-	Success bool
-	NextIndex int
-	From int
+	Success	bool
+	NextIndex	int
 }
 
-// Reply false if term < currentTerm
-func (rf *Raft) AppendEntries (args AppendEntriesArgs, reply *AppendEntriesReply) {
+func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer rf.persist()
-	if rf.state == "Follower" {
+	if rf.state == Follower {
 		rf.heartbeat = true
 		if args.Term > rf.currentTerm {
 			rf.currentTerm = args.Term
@@ -480,8 +427,6 @@ func (rf *Raft) AppendEntries (args AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	reply.From = rf.me
 	reply.Term = rf.currentTerm
-	// deal log replication
-	if len(args.Entries)!=0 {}
 	if args.Term < rf.currentTerm {
 		reply.Success = false
 		reply.NextIndex = 0//useless
@@ -503,7 +448,6 @@ func (rf *Raft) AppendEntries (args AppendEntriesArgs, reply *AppendEntriesReply
 			rf.log = rf.log[:args.PrevLogIndex+1]
 		}
 		rf.log = append(rf.log, args.Entries...)
-		if len(args.Entries) != 0 {}
 		reply.Success = true
 		reply.NextIndex = len(rf.log)
 
@@ -520,27 +464,25 @@ func (rf *Raft) AppendEntries (args AppendEntriesArgs, reply *AppendEntriesReply
 	}
 }
 
-// This function includes the RPC for sending the heartbeat along with the payload to the peer servers
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
-// In this function, heartbeats are sent out to peers. The AppendEntriesArgs are 
-// conveniently sent with the hearbeat as a payload.
 func (rf *Raft) SendHeartBeat(i int) {
-	payload := AppendEntriesArgs{}
-	payload.Term = rf.currentTerm
-	payload.LeaderId = rf.me
-	payload.PrevLogIndex = rf.nextIndex[i] - 1
-	payload.PrevLogTerm = rf.log[payload.PrevLogIndex].Term
-	payload.Entries = rf.log[rf.nextIndex[i]:]
-	payload.LeaderCommit = rf.commitIndex
+	args := AppendEntriesArgs{}
+	args.Term = rf.currentTerm
+	args.LeaderId = rf.me
+	args.PrevLogIndex = rf.nextIndex[i] - 1
+	args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
+	args.Entries = rf.log[rf.nextIndex[i]:]
+	args.LeaderCommit = rf.commitIndex
 	reply := &AppendEntriesReply{}
-	if rf.sendAppendEntries(i, payload, reply) {
+	
+	if rf.sendAppendEntries(i, args, reply) {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
-		if rf.state == "Leader" {
+		if rf.state == Leader {
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.persist()
@@ -549,7 +491,6 @@ func (rf *Raft) SendHeartBeat(i int) {
 			} else if reply.Success {
 				rf.matchIndex[i] = reply.NextIndex - 1
 				if rf.nextIndex[i] < reply.NextIndex {
-					rf.nextIndex[i] = reply.NextIndex
 				}
 				rf.nextIndex[i] = reply.NextIndex
 			} else {
@@ -557,4 +498,40 @@ func (rf *Raft) SendHeartBeat(i int) {
 			}
 		}
 	}
+}
+
+// Utility Methods
+func (rf *Raft) isLogMatch(args RequestVoteArgs) bool {
+	if rf.log[len(rf.log)-1].Term != args.LastLogTerm {
+		return rf.log[len(rf.log)-1].Term < args.LastLogTerm
+	} else {
+		return len(rf.log) - 1 <= args.LastLogIndex
+	}
+}
+
+func randomNumberGenerator() int {
+	return rand.Intn(500) + 500
+}
+
+func (rf *Raft) RunServerLoopAsFollower(){
+	rf.state = Follower
+	go rf.ServerLoop()
+}
+
+func (rf *Raft) RunServerLoopAsCandidate(){
+	rf.state = Candidate
+	go rf.ServerLoop()
+}
+
+func (rf *Raft) RunServerLoopAsLeader(){
+	rf.state = Leader
+	rf.nextIndex = make([]int,len(rf.peers))
+	rf.matchIndex = make([]int,len(rf.peers))
+	for i:=0; i<len(rf.peers); i++ {
+		if i != rf.me {
+			rf.nextIndex[i] = len(rf.log)
+			rf.matchIndex[i] = 0
+		}
+	}
+	go rf.ServerLoop()
 }
