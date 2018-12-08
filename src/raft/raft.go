@@ -247,15 +247,15 @@ func (rf *Raft) handleSendRequestVote(i int) {
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	index := -1
 	term,isLeader := rf.GetState()
 	if isLeader {
-		rf.mu.Lock()
 		entry := LogEntry{term,command}
 		rf.log = append(rf.log, entry)
 		rf.persist()
 		index = len(rf.log) - 1
-		rf.mu.Unlock()
 	}
 	return index, term, isLeader
 }
