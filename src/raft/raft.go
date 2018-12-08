@@ -478,9 +478,6 @@ func (rf *Raft) SendHeartBeat(i int) {
 				return
 			} else if reply.Success {
 				rf.matchIndex[i] = reply.NextIndex - 1
-				if rf.nextIndex[i] < reply.NextIndex {
-					// rf.nextIndex[i] = reply.NextIndex
-				}
 				rf.nextIndex[i] = reply.NextIndex
 			} else {
 				rf.nextIndex[i] = reply.NextIndex
