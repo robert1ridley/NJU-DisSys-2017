@@ -320,7 +320,6 @@ func (rf *Raft) ServerLoop() {
 	// Server loop contains switch statement, checking whether server state is 'follower', 'candidate' or 'leader'
 	switch rf.state {
 		case Follower:
-			rf.heartbeat = false
 			for rf.state == Follower {
 				// Follower sets a timer. If it hasn't received a heartbeat from the leader before the timeour, it will
 				// become a candidate. Timeout is set randomly between 150 and 300 ms by the randomNumberGenerator() function.
@@ -398,7 +397,6 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	From int //for debug
 	Term int
 	Success	bool
 	NextIndex	int
@@ -424,11 +422,10 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 			rf.RunServerLoopAsFollower()
 		}
 	}
-	reply.From = rf.me
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		reply.Success = false
-		reply.NextIndex = 0//useless
+		reply.NextIndex = 0
 	} else if args.PrevLogIndex >= len(rf.log) {
 		reply.Success = false
 		// optimization
@@ -479,8 +476,6 @@ func (rf *Raft) SendHeartBeat(i int) {
 	reply := &AppendEntriesReply{}
 	
 	if rf.sendAppendEntries(i, args, reply) {
-		rf.mu.Lock()
-		defer rf.mu.Unlock()
 		if rf.state == Leader {
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
@@ -502,9 +497,15 @@ func (rf *Raft) SendHeartBeat(i int) {
 // Utility Methods
 func (rf *Raft) isLogMatch(args RequestVoteArgs) bool {
 	if rf.log[len(rf.log)-1].Term != args.LastLogTerm {
-		return rf.log[len(rf.log)-1].Term < args.LastLogTerm
+		if rf.log[len(rf.log)-1].Term < args.LastLogTerm {
+			return true
+		}
+		return false
 	} else {
-		return len(rf.log) - 1 <= args.LastLogIndex
+		if len(rf.log) - 1 <= args.LastLogIndex {
+			return true
+		}
+		return false
 	}
 }
 
@@ -514,6 +515,7 @@ func randomNumberGenerator() int {
 
 func (rf *Raft) RunServerLoopAsFollower(){
 	rf.state = Follower
+	rf.heartbeat = false
 	go rf.ServerLoop()
 }
 
