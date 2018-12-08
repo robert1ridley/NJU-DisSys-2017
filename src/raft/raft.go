@@ -176,10 +176,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 			rf.currentTerm = args.Term
 			rf.votedFor = -1
 			rf.RunServerLoopAsFollower()
-			if isLogMatch {
-				rf.votedFor = args.CandidateId
-				reply.VoteGranted = true
-			}
+			//REM
 		}
 	}
 }
@@ -415,16 +412,16 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		}
 	}
 	reply.Term = rf.currentTerm
+	// Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
 		reply.Success = false
 		reply.NextIndex = 0
 	} else if args.PrevLogIndex >= len(rf.log) {
 		reply.Success = false
-		// optimization
 		reply.NextIndex = len(rf.log)
+		// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	} else if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 		reply.Success = false
-		// optimization
 		for i:=args.PrevLogIndex-1;i>=0;i--{
 			if rf.log[i].Term != rf.log[args.PrevLogIndex].Term {
 				reply.NextIndex = i + 1
@@ -439,9 +436,10 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		reply.Success = true
 		reply.NextIndex = len(rf.log)
 
+		// If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 		if args.LeaderCommit > rf.commitIndex {
-			N := int(math.Min(float64(args.LeaderCommit), float64(len(rf.log)-1)))
-			rf.commitIndex = N
+			minCommit := int(math.Min(float64(args.LeaderCommit), float64(len(rf.log)-1)))
+			rf.commitIndex = minCommit
 		}
 		go func() {
 			for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
