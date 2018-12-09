@@ -401,10 +401,10 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		rf.currentTerm = args.Term
 		rf.RunServerLoopAsFollower()
 	}
-	reply.Success = false
-	rf.heartbeat = true
 	// Reply false if term < currentTerm
 	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
+	reply.Success = false
+	rf.heartbeat = true
 	if args.Term < rf.currentTerm {
 		reply.NextIndex = rf.log[len(rf.log)-1].Term
 	} else if args.PrevLogIndex >= len(rf.log) {
