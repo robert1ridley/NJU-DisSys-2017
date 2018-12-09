@@ -25,7 +25,7 @@ import (
 	"time"
 	"math/rand"
 	// "fmt"
-	"math"
+	// "math"
 )
 
 //
@@ -330,7 +330,7 @@ func (rf *Raft) ServerLoop() {
 				rf.votedFor = rf.me
 				rf.persist()
 				rf.votes = 1
-				// Candidate sends vote requests to other peers
+				// Candidate sends vote requests to other peers (except self)
 				for i := 0; i < len(rf.peers); i++ {
 					if i != rf.me {
 						go rf.handleSendRequestVote(i)
@@ -353,12 +353,7 @@ func (rf *Raft) ServerLoop() {
 				}
 				rf.CalulateCommitIndex()
 				timer := time.NewTimer(time.Duration(200) * time.Millisecond)
-				go func() {
-					for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-						rf.applyCh <- ApplyMsg{Index: i, Command: rf.log[i].Command}
-						rf.lastApplied = i
-					}
-				}()
+				go rf.CommitLogs()
 				<-timer.C
 			}
 		}
@@ -402,29 +397,19 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer rf.persist()
-	switch rf.state {
-		case Candidate, Leader:
-			if args.Term > rf.currentTerm {
-				rf.currentTerm = args.Term
-				rf.RunServerLoopAsFollower()
-			}
-		default:
-			rf.heartbeat = true
-			if args.Term > rf.currentTerm {
-				rf.currentTerm = args.Term
-			}
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.RunServerLoopAsFollower()
 	}
-
+	reply.Success = false
+	rf.heartbeat = true
 	// Reply false if term < currentTerm
+	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	if args.Term < rf.currentTerm {
-		reply.Success = false
-		reply.NextIndex = 0
+		reply.NextIndex = rf.log[len(rf.log)-1].Term
 	} else if args.PrevLogIndex >= len(rf.log) {
-		reply.Success = false
 		reply.NextIndex = len(rf.log)
-		// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	} else if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
-		reply.Success = false
 		for i := args.PrevLogIndex-1; i>=0; i-- {
 			if rf.log[i].Term != rf.log[args.PrevLogIndex].Term {
 				reply.NextIndex = i + 1
@@ -436,13 +421,16 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 			rf.log = rf.log[:args.PrevLogIndex+1]
 		}
 		rf.log = append(rf.log, args.Entries...)
+		// term is not < currentTerm, and log containts entry at prevLogIndex whose term matches prevLogTerm.
+		// Therefore, reply true.
 		reply.Success = true
 		reply.NextIndex = len(rf.log)
 
 		// If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 		if args.LeaderCommit > rf.commitIndex {
-			minCommit := int(math.Min(float64(args.LeaderCommit), float64(len(rf.log)-1)))
-			rf.commitIndex = minCommit
+			if args.LeaderCommit < len(rf.log)-1 {
+				rf.commitIndex = args.LeaderCommit
+			} else { rf.commitIndex = len(rf.log)-1 }
 		}
 		go rf.CommitLogs()
 	}
