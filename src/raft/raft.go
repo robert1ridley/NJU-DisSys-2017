@@ -165,6 +165,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 				reply.VoteGranted = true
 			}
 		} else if args.Term == rf.currentTerm {
+			// If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote
 			if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && isLogMatch {
 				rf.votedFor = args.CandidateId
 				rf.heartbeat = true
@@ -176,7 +177,6 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 			rf.currentTerm = args.Term
 			rf.votedFor = -1
 			rf.RunServerLoopAsFollower()
-			//REM
 		}
 	}
 }
