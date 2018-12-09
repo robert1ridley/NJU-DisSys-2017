@@ -344,26 +344,14 @@ func (rf *Raft) ServerLoop() {
 			}
 		case Leader:
 			for rf.state == Leader {
-				// Leader will send regular heartbeats to follower peers.
+				// Upon election: send initial empty AppendEntries RPCs (heartbeat) 
+				// to each server; repeat during idle periods to prevent election timeouts 
 				for i := 0; i < len(rf.peers); i++ {
 					if i != rf.me {
 						go rf.SendHeartBeat(i)
 					}
 				}
-				for N := len(rf.log) - 1; N > rf.commitIndex; N-- {
-					if rf.log[N].Term == rf.currentTerm {
-						count := 0
-						for i := 0; i < len(rf.peers); i++ {
-							if i != rf.me && rf.matchIndex[i] >= N {
-								count++
-							}
-						}
-						if count >= len(rf.peers)/2 {
-							rf.commitIndex = N
-							break
-						}
-					}
-				}
+				rf.CalulateCommitIndex()
 				timer := time.NewTimer(time.Duration(200) * time.Millisecond)
 				go func() {
 					for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
@@ -374,6 +362,25 @@ func (rf *Raft) ServerLoop() {
 				<-timer.C
 			}
 		}
+}
+
+// If there exists an N such that N > commitIndex, a majority
+// of matchIndex[i] ≥ N, and log[N].term == currentTerm: set commitIndex = N
+func (rf *Raft) CalulateCommitIndex() {
+	for N := len(rf.log) - 1; N > rf.commitIndex; N-- {
+		if rf.log[N].Term == rf.currentTerm {
+			count := 0
+			for i := 0; i < len(rf.peers); i++ {
+				if i != rf.me && rf.matchIndex[i] >= N {
+					count++
+				}
+			}
+			if count >= len(rf.peers)/2 {
+				rf.commitIndex = N
+				return
+			}
+		}
+	}
 }
 
 type AppendEntriesArgs struct {
@@ -395,23 +402,19 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer rf.persist()
-	if rf.state == Follower {
-		rf.heartbeat = true
-		if args.Term > rf.currentTerm {
-			rf.currentTerm = args.Term
-		}
-	} else if rf.state == Candidate {
-		if args.Term >= rf.currentTerm {
-			rf.currentTerm = args.Term
-			rf.RunServerLoopAsFollower()
-		}
-	} else if rf.state == Leader {
-		if args.Term > rf.currentTerm {
-			rf.currentTerm = args.Term
-			rf.RunServerLoopAsFollower()
-		}
+	switch rf.state {
+		case Candidate, Leader:
+			if args.Term > rf.currentTerm {
+				rf.currentTerm = args.Term
+				rf.RunServerLoopAsFollower()
+			}
+		default:
+			rf.heartbeat = true
+			if args.Term > rf.currentTerm {
+				rf.currentTerm = args.Term
+			}
 	}
-	reply.Term = rf.currentTerm
+
 	// Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
 		reply.Success = false
@@ -422,7 +425,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	} else if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 		reply.Success = false
-		for i:=args.PrevLogIndex-1;i>=0;i--{
+		for i := args.PrevLogIndex-1; i>=0; i-- {
 			if rf.log[i].Term != rf.log[args.PrevLogIndex].Term {
 				reply.NextIndex = i + 1
 				break
@@ -441,13 +444,20 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 			minCommit := int(math.Min(float64(args.LeaderCommit), float64(len(rf.log)-1)))
 			rf.commitIndex = minCommit
 		}
-		go func() {
-			for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-				rf.applyCh <- ApplyMsg{Index: i, Command: rf.log[i].Command}
-				rf.lastApplied = i
-			}
-		}()
+		go rf.CommitLogs()
 	}
+	reply.Term = rf.currentTerm
+}
+
+func (rf *Raft) CommitLogs() {
+	rf.mu.Lock()
+	commitIndex := rf.commitIndex
+	for i := rf.lastApplied + 1; i <= commitIndex; i++ {
+		msg := ApplyMsg{Index: i, Command: rf.log[i].Command}
+		rf.applyCh <- msg
+		rf.lastApplied = i
+	}
+	rf.mu.Unlock()
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
