@@ -165,7 +165,8 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 				reply.VoteGranted = true
 			}
 		} else if args.Term == rf.currentTerm {
-			// If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote
+			// If votedFor is null or candidateId, and candidate’s log is at least as up-to-date 
+			// as receiver’s log, grant vote
 			if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && isLogMatch {
 				rf.votedFor = args.CandidateId
 				rf.heartbeat = true
@@ -174,6 +175,8 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		}
 	case Candidate, Leader:
 		if args.Term > rf.currentTerm {
+			// If the term maintained by a 'non-follower' peer is lower than the candidate, 
+			// the peer will update its term to match the candidate's and will then become a follower
 			rf.currentTerm = args.Term
 			rf.votedFor = -1
 			rf.RunServerLoopAsFollower()
@@ -245,7 +248,6 @@ func (rf *Raft) handleSendRequestVote(i int) {
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	index := -1
 	term,isLeader := rf.GetState()
 	if isLeader {
@@ -254,6 +256,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.persist()
 		index = len(rf.log) - 1
 	}
+	rf.mu.Unlock()
 	return index, term, isLeader
 }
 
@@ -410,16 +413,17 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	} else if args.PrevLogIndex >= len(rf.log) {
 		reply.NextIndex = len(rf.log)
 	} else if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
-		for i := args.PrevLogIndex-1; i>=0; i-- {
+		for i := args.PrevLogIndex -1; i >= 0; i-- {
 			if rf.log[i].Term != rf.log[args.PrevLogIndex].Term {
 				reply.NextIndex = i + 1
 				break
 			}
 		}
 	} else {
-		if len(rf.log) > args.PrevLogIndex+1 {
+		if len(rf.log) > args.PrevLogIndex +1 {
 			rf.log = rf.log[:args.PrevLogIndex+1]
 		}
+		// Append any new entries not already in the log
 		rf.log = append(rf.log, args.Entries...)
 		// term is not < currentTerm, and log containts entry at prevLogIndex whose term matches prevLogTerm.
 		// Therefore, reply true.
@@ -432,6 +436,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 				rf.commitIndex = args.LeaderCommit
 			} else { rf.commitIndex = len(rf.log)-1 }
 		}
+		// Commit logs once commit index has been updated
 		go rf.CommitLogs()
 	}
 	reply.Term = rf.currentTerm
@@ -467,16 +472,18 @@ func (rf *Raft) SendHeartBeat(i int) {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		if rf.state == Leader {
-			if reply.Term > rf.currentTerm {
+			// Update index if leaders term is at least that of reply
+			if reply.Term <= rf.currentTerm {
+				rf.nextIndex[i] = reply.NextIndex
+				if reply.Success {
+					rf.matchIndex[i] = reply.NextIndex - 1
+				}
+			} else {
+				// Leader becomes follower if its term is behind responding peer. It updates term, persists 
+				// and becomes a follower
 				rf.currentTerm = reply.Term
 				rf.persist()
 				rf.RunServerLoopAsFollower()
-				return
-			} else if reply.Success {
-				rf.matchIndex[i] = reply.NextIndex - 1
-				rf.nextIndex[i] = reply.NextIndex
-			} else {
-				rf.nextIndex[i] = reply.NextIndex
 			}
 		}
 	}
