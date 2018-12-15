@@ -459,16 +459,16 @@ func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *App
 }
 
 func (rf *Raft) SendHeartBeat(i int) {
-	args := AppendEntriesArgs{}
-	args.Term = rf.currentTerm
-	args.LeaderId = rf.me
-	args.PrevLogIndex = rf.nextIndex[i] - 1
-	args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
-	args.Entries = rf.log[rf.nextIndex[i]:]
-	args.LeaderCommit = rf.commitIndex
+	payload := AppendEntriesArgs{}
+	payload.Term = rf.currentTerm
+	payload.LeaderId = rf.me
+	payload.PrevLogIndex = rf.nextIndex[i] - 1
+	payload.PrevLogTerm = rf.log[payload.PrevLogIndex].Term
+	payload.Entries = rf.log[rf.nextIndex[i]:]
+	payload.LeaderCommit = rf.commitIndex
 	reply := &AppendEntriesReply{}
 	
-	if rf.sendAppendEntries(i, args, reply) {
+	if rf.sendAppendEntries(i, payload, reply) {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		if rf.state == Leader {
